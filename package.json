@@ -1,0 +1,74 @@
+{
+  "name": "sgnaudio7",
+  "productName": "SGNAudio 7",
+  "version": "7.0.0",
+  "description": "SGNAudio 7 - Editor y grabador de audio multipista. Desarrollado por Salvador G. Núñez.",
+  "author": "Salvador G. Núñez <salvadorgnunez@gmail.com>",
+  "license": "MIT",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "build:win": "electron-builder --win nsis",
+    "build:mac": "electron-builder --mac dmg",
+    "build": "electron-builder"
+  },
+  "dependencies": {
+    "lamejs": "^1.2.1"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.salvadorgnunez.sgnaudio7",
+    "productName": "SGNAudio 7",
+    "copyright": "Desarrollado por Salvador G. Núñez",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "src/**/*",
+      "build/icon.png",
+      "node_modules/lamejs/lame.min.js",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png",
+      "artifactName": "SGNAudio7-Windows.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "SGNAudio 7"
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "universal"
+          ]
+        }
+      ],
+      "icon": "build/icon.png",
+      "artifactName": "SGNAudio7-Mac.${ext}",
+      "category": "public.app-category.music",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "SGNAudio 7 necesita el micrófono para grabar audio."
+      }
+    },
+    "dmg": {
+      "title": "SGNAudio 7"
+    }
+  }
+}

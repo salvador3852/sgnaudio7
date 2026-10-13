@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SGNAudio 7 — Descargar</title>
+<style>
+  :root{--bg:#0b0a1f;--panel:#14122f;--line:#2a2660;--text:#e6e8f5;--muted:#8c90b8;--cyan:#22d3ee;--violet:#a855f7}
+  *{box-sizing:border-box}
+  body{margin:0;min-height:100vh;background:radial-gradient(circle at 50% 0,#241c63 0,var(--bg) 60%);color:var(--text);font:16px/1.5 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;display:flex;flex-direction:column;align-items:center;padding:48px 20px}
+  img.logo{width:160px;height:160px;border-radius:36px;box-shadow:0 20px 60px rgba(168,85,247,.35)}
+  h1{font-size:44px;margin:20px 0 4px;background:linear-gradient(90deg,var(--cyan),var(--violet));-webkit-background-clip:text;background-clip:text;color:transparent}
+  p.lead{color:var(--muted);max-width:560px;text-align:center;margin:0 0 32px}
+  .buttons{display:flex;gap:18px;flex-wrap:wrap;justify-content:center}
+  a.dl{display:flex;align-items:center;gap:14px;padding:16px 28px;border-radius:14px;text-decoration:none;color:#0b0a1f;font-weight:800;font-size:18px;background:linear-gradient(135deg,var(--cyan),var(--violet));box-shadow:0 10px 30px rgba(34,211,238,.25);transition:transform .15s}
+  a.dl:hover{transform:translateY(-3px)}
+  a.dl small{display:block;font-weight:500;font-size:12px;opacity:.8}
+  a.dl svg{width:30px;height:30px;fill:#0b0a1f;flex:none}
+  ul.feat{list-style:none;padding:0;margin:44px 0 0;display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;max-width:760px;width:100%}
+  ul.feat li{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+  footer{margin-top:40px;color:var(--muted);font-size:14px;text-align:center}
+  .steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px;max-width:620px;width:100%;margin-top:26px}
+  .steps>div{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 18px}
+  .steps ol{margin:6px 0;padding-left:20px}
+  .steps small{color:var(--muted)}
+  .note{color:var(--muted);font-size:13px;max-width:560px;text-align:center;margin-top:18px}
+</style>
+</head>
+<body>
+  <img class="logo" src="logo.png" alt="SGNAudio 7">
+  <h1>SGNAudio 7</h1>
+  <p class="lead">Editor y grabador de audio multipista. Graba, edita, aplica efectos y exporta a WAV o MP3. Gratuito, para Windows y Mac.</p>
+
+  <div class="buttons">
+    <a class="dl" id="dlWin" href="https://github.com/TU_USUARIO/TU_REPO/releases/latest/download/SGNAudio7-Windows.exe">
+      <svg viewBox="0 0 24 24"><path d="M3 5.5 10.5 4.4v7H3zM11.5 4.3 21 3v8.4h-9.5zM3 12.6h7.5v7L3 18.5zM11.5 12.6H21V21l-9.5-1.3z"/></svg>
+      <span>Descargar para Windows<small>Windows 10 y 11 · archivo .exe</small></span>
+    </a>
+    <a class="dl" id="dlMac" href="https://github.com/TU_USUARIO/TU_REPO/releases/latest/download/SGNAudio7-Mac.dmg">
+      <svg viewBox="0 0 24 24"><path d="M16.4 12.6c0-2.3 1.9-3.4 2-3.5-1.1-1.6-2.8-1.8-3.4-1.8-1.4-.1-2.8.9-3.5.9-.7 0-1.8-.8-3-.8-1.5 0-3 .9-3.800 2.300-1.600 2.800-.4 7 1.200 9.300.8 1.100 1.700 2.400 2.900 2.300 1.200 0 1.600-.7 3-.7s1.800.7 3 .7c1.300 0 2.100-1.100 2.800-2.300.9-1.300 1.300-2.600 1.300-2.700-.1 0-2.500-1-2.500-3.700zM14.200 5.800c.6-.8 1.100-1.800.9-2.800-.9 0-2 .6-2.700 1.400-.6.700-1.100 1.800-.9 2.800 1 .1 2-.5 2.700-1.400z"/></svg>
+      <span>Descargar para Mac<small>macOS · Intel y Apple Silicon · archivo .dmg</small></span>
+    </a>
+  </div>
+  <div class="steps">
+    <div><b>Windows</b><ol><li>Descarga el archivo</li><li>Ábrelo con doble clic</li><li>Pulsa «Siguiente» hasta terminar</li></ol><small>Si sale un aviso azul: «Más información» → «Ejecutar de todas formas».</small></div>
+    <div><b>Mac</b><ol><li>Descarga el archivo</li><li>Ábrelo con doble clic</li><li>Arrastra SGNAudio 7 a Aplicaciones</li></ol><small>La primera vez: clic derecho sobre la app → «Abrir».</small></div>
+  </div>
+
+  <ul class="feat">
+    <li>🎙 Grabación con micrófono</li>
+    <li>🎚 Multipista con mute, solo y volumen</li>
+    <li>✂ Cortar, copiar, pegar, recortar y deshacer</li>
+    <li>✨ Fundidos, normalizar, eco, reducción de ruido, compresor y más</li>
+    <li>💾 Exporta a WAV y MP3</li>
+  </ul>
+
+  <footer>SGNAudio 7 · Desarrollado por Salvador G. Núñez</footer>
+<script>
+  // Los botones se configuran solos cuando la página se publica en GitHub Pages (usuario.github.io/repositorio)
+  (function(){
+    var m = location.hostname.match(/^(.+)\.github\.io$/);
+    var repo = location.pathname.split('/')[1];
+    var base = (m && repo) ? 'https://github.com/' + m[1] + '/' + repo + '/releases/latest/download/' : null;
+    function wire(id, file){
+      var a = document.getElementById(id);
+      if(base){ a.href = base + file; }
+      else { a.addEventListener('click', function(e){ e.preventDefault(); alert('Esta página todavía no está publicada en internet. Cuando la publiques, los botones descargarán la aplicación.'); }); }
+    }
+    wire('dlWin','SGNAudio7-Windows.exe'); wire('dlMac','SGNAudio7-Mac.dmg');
+  })();
+</script>
+</body>
+</html>
