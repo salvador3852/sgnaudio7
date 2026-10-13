@@ -1,0 +1,51 @@
+name: Compilar SGNAudio 7
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - run: npm install
+      - run: npx electron-builder --win nsis --publish never
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SGNAudio7-Windows
+          path: dist/SGNAudio7-Windows.exe
+
+  mac:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - run: npm install
+      - run: npx electron-builder --mac dmg --universal --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SGNAudio7-Mac
+          path: dist/SGNAudio7-Mac.dmg
+
+  release:
+    needs: [windows, mac]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { path: release, merge-multiple: true }
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v7.0.${{ github.run_number }}
+          name: SGNAudio 7 (versión ${{ github.run_number }})
+          body: "SGNAudio 7 — Desarrollado por Salvador G. Núñez"
+          files: |
+            release/SGNAudio7-Windows.exe
+            release/SGNAudio7-Mac.dmg
