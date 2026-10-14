@@ -463,6 +463,83 @@ async function toggleRec() {
   setStatus('Grabando… pulsa ● otra vez para terminar.');
 }
 
+// ---------- Proyecto (.sgn): guardar y abrir para seguir otro día ----------
+// Formato: 'SGN7' + largo del JSON (uint32) + JSON (pistas) + audio en 16 bits.
+function encodeProject() {
+  const meta = { v: 1, sr: SR, tracks: [] };
+  let off = 0;
+  tracks.forEach((t) => {
+    const len = t.ch[0].length;
+    meta.tracks.push({ name: t.name, start: t.start, gain: t.gain, mute: t.mute, solo: t.solo, channels: t.ch.length, length: len, offset: off });
+    off += t.ch.length * len * 2;
+  });
+  let json = new TextEncoder().encode(JSON.stringify(meta));
+  const pad = (8 + json.length) % 2;                     // el audio debe empezar en posición par
+  if (pad) { const j2 = new Uint8Array(json.length + 1); j2.set(json); j2[json.length] = 32; json = j2; }
+  const start = 8 + json.length;
+  const buf = new ArrayBuffer(start + off);
+  const dv = new DataView(buf);
+  new Uint8Array(buf, 0, 4).set([83, 71, 78, 55]);
+  dv.setUint32(4, json.length, true);
+  new Uint8Array(buf, 8, json.length).set(json);
+  tracks.forEach((t, i) => {
+    const m = meta.tracks[i];
+    t.ch.forEach((c, k) => {
+      const out = new Int16Array(buf, start + m.offset + k * m.length * 2, m.length);
+      for (let j = 0; j < m.length; j++) out[j] = Math.round(clamp(c[j], -1, 1) * 32767);
+    });
+  });
+  return buf;
+}
+function resampleLinear(src, from, to) {
+  if (from === to) return src;
+  const n = Math.max(1, Math.round((src.length * to) / from)), out = new Float32Array(n), r = from / to;
+  for (let i = 0; i < n; i++) { const p = i * r, i0 = Math.floor(p), f = p - i0; out[i] = (src[i0] ?? 0) * (1 - f) + (src[i0 + 1] ?? src[i0] ?? 0) * f; }
+  return out;
+}
+function decodeProject(buf) {
+  const head = new Uint8Array(buf, 0, 4);
+  if (head[0] !== 83 || head[1] !== 71 || head[2] !== 78 || head[3] !== 55) throw new Error('No es un proyecto de SGNAudio 7');
+  const jl = new DataView(buf).getUint32(4, true);
+  const meta = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 8, jl)));
+  const start = 8 + jl;
+  return meta.tracks.map((m) => {
+    const ch = [];
+    for (let k = 0; k < m.channels; k++) {
+      const i16 = new Int16Array(buf, start + m.offset + k * m.length * 2, m.length);
+      const f = new Float32Array(m.length);
+      for (let j = 0; j < m.length; j++) f[j] = i16[j] / 32768;
+      ch.push(resampleLinear(f, meta.sr, SR));
+    }
+    return { name: m.name, start: m.start, gain: m.gain, mute: !!m.mute, solo: !!m.solo, ch };
+  });
+}
+async function saveProject() {
+  if (!tracks.length) return setStatus('No hay nada que guardar todavía.');
+  setStatus('Guardando proyecto…');
+  const path = await window.sgn.saveDialog({ defaultName: 'Mi-proyecto.sgn', ext: 'sgn', data: encodeProject() });
+  setStatus(path ? 'Proyecto guardado: ' + path : 'Guardado cancelado.');
+}
+async function openProject() {
+  if (tracks.length) {
+    const ok = await ask('Abrir proyecto', [], 'Abrir', 'Se cerrará el proyecto actual. Si no lo guardaste, se perderá. ¿Continuar?');
+    if (!ok) return;
+  }
+  const f = await window.sgn.openProject();
+  if (!f) return;
+  try {
+    const list = decodeProject(f.data.buffer.slice(f.data.byteOffset, f.data.byteOffset + f.data.byteLength));
+    stopPlay(); tracks = []; undoStack = []; redoStack = []; sel = null; cursor = 0; activeId = null;
+    list.forEach((t) => { const n = addTrack(t.name, t.ch, t.start); n.gain = t.gain; n.mute = t.mute; n.solo = t.solo; });
+    activeId = tracks[0]?.id ?? null;
+    renderAll(); zoomFit();
+    setStatus('Proyecto abierto: ' + f.name);
+  } catch (e) {
+    console.error(e);
+    setStatus('No se pudo abrir ese archivo. ¿Es un proyecto de SGNAudio 7 (.sgn)?');
+  }
+}
+
 // ---------- Exportar ----------
 function mixdown() {
   const len = tracks.reduce((m, t) => Math.max(m, Math.round(t.start * SR) + t.ch[0].length), 0);
@@ -547,7 +624,7 @@ function ask(title, fields, okLabel = 'Aplicar', message = '') {
 }
 function showAbout() {
   showModal(`<div class="about"><img src="logo.png" alt="SGNAudio 7"><h2>SGNAudio 7</h2>
-    <p>Editor y grabador de audio multipista.<br>Versión 7.3.0 (cada pista con su propia selección y posición, como Audacity)</p>
+    <p>Editor y grabador de audio multipista.<br>Versión 7.4.0 (guardar y abrir proyectos)</p>
     <p><b>Desarrollado por Salvador G. Núñez</b></p>
     <div class="actions" style="justify-content:center"><button id="mOk" class="primary">Cerrar</button></div></div>`);
   $('#mOk').onclick = closeModal;
@@ -562,7 +639,7 @@ function showEffectsMenu() {
 function showShortcuts() {
   const rows = [['Espacio', 'Reproducir / Pausa'], ['R', 'Grabar / Terminar'], ['S', 'Detener'], ['L', 'Repetir selección'], ['H', 'Mover pista (mano ✋)'], ['Inicio', 'Ir al inicio'],
     ['Ctrl/Cmd + Z / Shift+Z', 'Deshacer / Rehacer'], ['Ctrl/Cmd + X / C / V', 'Cortar / Copiar / Pegar'], ['Supr', 'Eliminar selección'],
-    ['Ctrl/Cmd + T', 'Recortar al área'], ['Ctrl/Cmd + A', 'Seleccionar todo'], ['Ctrl/Cmd + + / −', 'Zoom'], ['Ctrl/Cmd + O', 'Abrir audio']];
+    ['Ctrl/Cmd + S', 'Guardar proyecto'], ['Ctrl/Cmd + T', 'Recortar al área'], ['Ctrl/Cmd + A', 'Seleccionar todo'], ['Ctrl/Cmd + + / −', 'Zoom'], ['Ctrl/Cmd + O', 'Abrir audio']];
   showModal(`<h2>Atajos de teclado</h2><table>${rows.map((r) => `<tr><td><kbd>${r[0]}</kbd></td><td>${r[1]}</td></tr>`).join('')}</table>
     <div class="actions"><button id="mOk" class="primary">Cerrar</button></div>`);
   $('#mOk').onclick = closeModal;
@@ -685,7 +762,7 @@ function updateOverlays() {
 }
 function updateInfo() {
   const t = activeTrack();
-  document.title = t ? 'SGNAudio 7 v7.3 — ' + t.name : 'SGNAudio 7 v7.3';
+  document.title = t ? 'SGNAudio 7 v7.4 — ' + t.name : 'SGNAudio 7 v7.4';
 }
 function renderAll() {
   $('#empty').classList.toggle('hidden', tracks.length > 0);
@@ -786,7 +863,7 @@ function tick() {
 
 // ---------- Comandos y eventos ----------
 const commands = {
-  open: openFiles, 'export-wav': exportWav, 'export-mp3': exportMp3, new: newProject,
+  open: openFiles, 'save-project': saveProject, 'open-project': openProject, 'export-wav': exportWav, 'export-mp3': exportMp3, new: newProject,
   undo, redo, cut: doCut, copy: doCopy, paste: doPaste, delete: doDelete, trim: doTrim,
   'select-all': selectAll, split: splitTrack, 'new-track': newEmptyTrack, 'dup-track': dupTrack, 'del-track': delTrack,
   'zoom-in': () => setZoom(pps * 1.5), 'zoom-out': () => setZoom(pps / 1.5), 'zoom-fit': zoomFit,
@@ -809,7 +886,7 @@ $('#btnUndo').onclick = undo; $('#btnRedo').onclick = redo;
 $('#btnCut').onclick = doCut; $('#btnCopy').onclick = doCopy; $('#btnPaste').onclick = doPaste;
 $('#btnTrim').onclick = doTrim; $('#btnSilence').onclick = () => applyFx('silence');
 $('#btnZoomIn').onclick = commands['zoom-in']; $('#btnZoomOut').onclick = commands['zoom-out']; $('#btnZoomFit').onclick = zoomFit;
-$('#btnOpen').onclick = openFiles; $('#btnWav').onclick = exportWav; $('#btnMp3').onclick = exportMp3;
+$('#btnOpen').onclick = openFiles; $('#btnSaveProj').onclick = saveProject; $('#btnOpenProj').onclick = openProject; $('#btnWav').onclick = exportWav; $('#btnMp3').onclick = exportMp3;
 $('#btnNewTrack').onclick = newEmptyTrack;
 
 $('#ruler').addEventListener('mousedown', (e) => {

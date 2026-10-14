@@ -12,7 +12,7 @@ function createWindow() {
   win = new BrowserWindow({
     width: 1280,
     height: 780,
-    minWidth: 980,
+    minWidth: 1100,
     minHeight: 560,
     backgroundColor: '#0b0a1f',
     title: 'SGNAudio 7',
@@ -36,6 +36,9 @@ function buildMenu() {
       label: 'Archivo',
       submenu: [
         item('Abrir audio…', 'open', 'CmdOrCtrl+O'),
+        item('Guardar proyecto…', 'save-project', 'CmdOrCtrl+S'),
+        item('Abrir proyecto…', 'open-project', 'CmdOrCtrl+Shift+O'),
+        { type: 'separator' },
         item('Exportar como WAV…', 'export-wav', 'CmdOrCtrl+Shift+E'),
         item('Exportar como MP3…', 'export-mp3', 'CmdOrCtrl+Shift+M'),
         { type: 'separator' },
@@ -115,6 +118,17 @@ ipcMain.handle('open-dialog', async () => {
   });
   if (r.canceled) return [];
   return r.filePaths.map((p) => ({ name: path.basename(p), data: fs.readFileSync(p) }));
+});
+
+ipcMain.handle('open-project', async () => {
+  const r = await dialog.showOpenDialog(win, {
+    title: 'Abrir proyecto',
+    properties: ['openFile'],
+    filters: [{ name: 'Proyecto SGNAudio 7', extensions: ['sgn'] }],
+  });
+  if (r.canceled || !r.filePaths.length) return null;
+  const p = r.filePaths[0];
+  return { name: path.basename(p), data: fs.readFileSync(p) };
 });
 
 ipcMain.handle('save-dialog', async (_e, { defaultName, ext, data }) => {

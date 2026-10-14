@@ -86,3 +86,8 @@ body.movemode .wavewrap.grabbing{cursor:grabbing}
 .track.active .wavewrap{outline:3px solid var(--accent);outline-offset:-3px;border-radius:4px}
 .wavewrap{overflow:hidden}
 .wavewrap.grabbing{cursor:grabbing!important}
+.tools-right button{white-space:nowrap;padding:6px 8px}
+.brand small,.brand b{white-space:nowrap}
+.titlebar{gap:10px}
+@media (max-width:1280px){.tabs{display:none}}
+.toolbar .group button{white-space:nowrap}
