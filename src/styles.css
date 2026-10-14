@@ -83,3 +83,6 @@ button.on{background:#cfe4ff;border-color:var(--accent);color:#0b4aa2}
 body.movemode .wavewrap{cursor:grab}
 body.movemode .wavewrap.grabbing{cursor:grabbing}
 #btnMove.on{background:#cfe4ff;border-color:var(--accent);color:#0b4aa2}
+.track.active .wavewrap{outline:3px solid var(--accent);outline-offset:-3px;border-radius:4px}
+.wavewrap{overflow:hidden}
+.wavewrap.grabbing{cursor:grabbing!important}

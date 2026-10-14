@@ -9,11 +9,11 @@ const SR = ctx.sampleRate;
 const HEAD_W = 200;
 
 // ---------- Estado ----------
-let tracks = [];            // {id,name,ch:[Float32Array],mute,solo,gain}
+let tracks = [];            // {id,name,ch:[Float32Array],start (s en la línea de tiempo),mute,solo,gain}
 let nextId = 1;
 let activeId = null;
 let pps = 100;              // píxeles por segundo
-let sel = null;             // {a,b} en segundos
+let sel = null;             // {a,b,id} en segundos de la línea de tiempo; pertenece a UNA sola pista (id)
 let cursor = 0;             // segundos
 let clipboard = null;       // [Float32Array]
 let loop = false;
@@ -35,7 +35,7 @@ outAn.connect(ctx.destination);
 
 // ---------- Utilidades ----------
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
-const dur = () => tracks.reduce((m, t) => Math.max(m, t.ch[0].length), 0) / SR;
+const dur = () => tracks.reduce((m, t) => Math.max(m, t.start + t.ch[0].length / SR), 0);
 const activeTrack = () => tracks.find((t) => t.id === activeId) || tracks[0] || null;
 function fmt(sec) {
   sec = Math.max(0, sec);
@@ -76,11 +76,7 @@ function channelsOf(abuf) {
   return out;
 }
 function addTrack(name, ch, startSec = 0) {
-  const pad = Math.round(startSec * SR);
-  if (pad > 0) {
-    ch = ch.map((c) => { const n = new Float32Array(c.length + pad); n.set(c, pad); return n; });
-  }
-  const t = { id: nextId++, name, ch, mute: false, solo: false, gain: 1 };
+  const t = { id: nextId++, name, ch, start: Math.max(0, startSec), mute: false, solo: false, gain: 1 };
   tracks.push(t);
   activeId = t.id;
   return t;
@@ -112,7 +108,7 @@ function newEmptyTrack() {
 function dupTrack() {
   const t = activeTrack(); if (!t) return;
   snapshot();
-  addTrack(t.name + ' (copia)', t.ch.map((c) => c.slice()));
+  addTrack(t.name + ' (copia)', t.ch.map((c) => c.slice()), t.start);
   renderAll();
 }
 function delTrack() {
@@ -124,42 +120,22 @@ function delTrack() {
 }
 function splitTrack() {
   const t = activeTrack(); if (!t) return;
-  const p = Math.round(cursor * SR);
+  const p = Math.round((cursor - t.start) * SR);
   if (p <= 0 || p >= t.ch[0].length) return setStatus('Coloca el cursor dentro de la pista para dividirla.');
   snapshot();
   const left = t.ch.map((c) => c.slice(0, p));
   const right = t.ch.map((c) => c.slice(p));
   t.ch = left;
-  const r = { id: nextId++, name: t.name + ' (2)', ch: right, mute: false, solo: false, gain: t.gain };
+  const r = { id: nextId++, name: t.name + ' (2)', ch: right, start: t.start + p / SR, mute: false, solo: false, gain: t.gain };
   tracks.splice(tracks.indexOf(t) + 1, 0, r);
   renderAll();
-}
-// Muestras de silencio exacto al inicio de la pista (límite para mover hacia la izquierda)
-function leadingSilenceSamples(t) {
-  const n = t.ch[0].length;
-  let i = 0;
-  for (; i < n; i++) {
-    let nz = false;
-    for (const c of t.ch) if (c[i] !== 0) { nz = true; break; }
-    if (nz) break;
-  }
-  return Math.min(i, Math.max(0, n - 1));
-}
-// Mueve una pista en el tiempo: n > 0 la retrasa (agrega silencio), n < 0 la adelanta (quita silencio inicial)
-function shiftTrack(t, n) {
-  if (!n) return;
-  stopPlay(); snapshot();
-  if (n > 0) t.ch = t.ch.map((c) => { const o = new Float32Array(c.length + n); o.set(c, n); return o; });
-  else t.ch = t.ch.map((c) => c.slice(-n));
-  renderAll();
-  setStatus('Pista «' + t.name + '» movida ' + (n > 0 ? 'a la derecha ' : 'a la izquierda ') + (Math.abs(n) / SR).toFixed(2) + ' s. Deshacer con ↶.');
 }
 function toggleMove(force) {
   moveMode = typeof force === 'boolean' ? force : !moveMode;
   $('#btnMove').classList.toggle('on', moveMode);
   document.body.classList.toggle('movemode', moveMode);
   setStatus(moveMode
-    ? 'Herramienta Mover ✋ activada: arrastra una pista a la izquierda o a la derecha. Pulsa ✋ otra vez para volver a seleccionar.'
+    ? 'Mano ✋ activada: arrastra cualquier pista a la izquierda o derecha. Pulsa ✋ otra vez para volver a seleccionar.'
     : 'Herramienta de selección activada.');
 }
 function newProject() {
@@ -173,7 +149,7 @@ function newProject() {
 // ---------- Edición ----------
 function rangeSamples(t, requireSel) {
   const len = t.ch[0].length;
-  if (sel) return [clamp(Math.round(sel.a * SR), 0, len), clamp(Math.round(sel.b * SR), 0, len)];
+  if (sel && sel.id === t.id && sel.b > sel.a) return [clamp(Math.round((sel.a - t.start) * SR), 0, len), clamp(Math.round((sel.b - t.start) * SR), 0, len)];
   if (requireSel) return null;
   return [0, len];
 }
@@ -198,8 +174,8 @@ function doCut() {
   stopPlay(); snapshot();
   clipboard = t.ch.map((c) => c.slice(r[0], r[1]));
   removeRange(t, r[0], r[1]);
-  cursor = r[0] / SR; sel = null;
-  renderAll(); setStatus('Cortado.');
+  cursor = t.start + r[0] / SR; sel = null;
+  renderAll(); setStatus('Cortado en «' + t.name + '».');
 }
 function doDelete() {
   const t = activeTrack(); if (!t) return;
@@ -207,15 +183,15 @@ function doDelete() {
   if (!r || r[1] <= r[0]) return setStatus('Selecciona un fragmento con el ratón primero.');
   stopPlay(); snapshot();
   removeRange(t, r[0], r[1]);
-  cursor = r[0] / SR; sel = null;
-  renderAll(); setStatus('Eliminado.');
+  cursor = t.start + r[0] / SR; sel = null;
+  renderAll(); setStatus('Eliminado en «' + t.name + '».');
 }
 function doPaste() {
   const t = activeTrack();
   if (!clipboard) return setStatus('El portapapeles está vacío.');
   if (!t) return;
   stopPlay(); snapshot();
-  let pos = Math.round(cursor * SR);
+  let pos = Math.max(0, Math.round((cursor - t.start) * SR));
   const r = rangeSamples(t, true);
   if (r && r[1] > r[0]) { removeRange(t, r[0], r[1]); pos = r[0]; }
   const len = t.ch[0].length;
@@ -227,9 +203,9 @@ function doPaste() {
     n.set(c.subarray(0, pos)); n.set(src, pos); n.set(c.subarray(pos), pos + clipLen);
     return n;
   });
-  sel = { a: pos / SR, b: (pos + clipLen) / SR };
+  sel = { a: t.start + pos / SR, b: t.start + (pos + clipLen) / SR, id: t.id };
   cursor = sel.a;
-  renderAll(); setStatus('Pegado.');
+  renderAll(); setStatus('Pegado en «' + t.name + '».');
 }
 function doTrim() {
   const t = activeTrack(); if (!t) return;
@@ -237,12 +213,14 @@ function doTrim() {
   if (!r || r[1] <= r[0]) return setStatus('Selecciona el fragmento que quieres conservar.');
   stopPlay(); snapshot();
   t.ch = t.ch.map((c) => c.slice(r[0], r[1]));
-  sel = null; cursor = 0;
+  t.start += r[0] / SR;
+  sel = null; cursor = t.start;
   renderAll(); setStatus('Recortado al área seleccionada.');
 }
 function selectAll() {
-  const d = dur(); if (!d) return;
-  sel = { a: 0, b: d }; updateOverlays();
+  const t = activeTrack(); if (!t) return;
+  sel = { a: t.start, b: t.start + t.ch[0].length / SR, id: t.id }; updateOverlays();
+  setStatus('Seleccionada toda la pista «' + t.name + '».');
 }
 
 // ---------- Efectos ----------
@@ -391,13 +369,13 @@ async function applyFx(name) {
         out.set(c.subarray(b), a + nl);
         return out;
       });
-      if (sel) sel = { a: a / SR, b: (a + nl) / SR };
+      if (sel && sel.id === t.id) sel = { a: t.start + a / SR, b: t.start + (a + nl) / SR, id: t.id };
       break;
     }
     default: undoStack.pop(); return;
   }
   renderAll();
-  setStatus('Efecto aplicado a «' + t.name + '» (' + (sel ? 'zona seleccionada' : 'pista completa') + '): ' + (FX_LABEL[name] || name) + '.');
+  setStatus('Efecto aplicado a «' + t.name + '» (' + (sel && sel.id === t.id ? 'zona seleccionada' : 'pista completa') + '): ' + (FX_LABEL[name] || name) + '.');
 }
 
 // ---------- Reproducción ----------
@@ -421,25 +399,23 @@ function play() {
   const anySolo = tracks.some((t) => t.solo);
   tracks.forEach((t) => {
     const len = t.ch[0].length; if (!len) return;
+    const tEnd = t.start + len / SR;
+    if (from >= tEnd) return;
+    if (sel && to <= t.start) return;
     const buf = ctx.createBuffer(t.ch.length, len, SR);
     t.ch.forEach((c, i) => buf.copyToChannel(c, i));
     const src = ctx.createBufferSource(); src.buffer = buf;
     const g = ctx.createGain(); g.gain.value = trackGain(t, anySolo);
     src.connect(g); g.connect(master);
-    if (loop && sel) { src.loop = true; src.loopStart = sel.a; src.loopEnd = Math.min(sel.b, len / SR); }
-    const offset = Math.min(from, len / SR);
-    if (offset >= len / SR) return;
-    src.start(0, offset);
-    if (sel && !loop) src.stop(ctx.currentTime + (to - from));
+    src.start(ctx.currentTime + Math.max(0, t.start - from), Math.max(0, from - t.start));
+    if (sel) src.stop(ctx.currentTime + (to - from));
     playSources.push({ src, g, t });
   });
   playFrom = from; playTo = to; playCtxStart = ctx.currentTime; playing = true;
   $('#btnPlay').textContent = '⏸';
 }
 function currentPos() {
-  let pos = playFrom + (ctx.currentTime - playCtxStart);
-  if (loop && sel && sel.b > sel.a) pos = sel.a + ((pos - sel.a) % (sel.b - sel.a));
-  return pos;
+  return playFrom + (ctx.currentTime - playCtxStart);
 }
 function stopPlay() {
   if (!playing) return;
@@ -489,13 +465,13 @@ async function toggleRec() {
 
 // ---------- Exportar ----------
 function mixdown() {
-  const len = tracks.reduce((m, t) => Math.max(m, t.ch[0].length), 0);
+  const len = tracks.reduce((m, t) => Math.max(m, Math.round(t.start * SR) + t.ch[0].length), 0);
   const L = new Float32Array(len), R = new Float32Array(len);
   const anySolo = tracks.some((t) => t.solo);
   tracks.forEach((t) => {
     const g = trackGain(t, anySolo); if (!g) return;
-    const cl = t.ch[0], cr = t.ch[1] || t.ch[0];
-    for (let i = 0; i < cl.length; i++) { L[i] += cl[i] * g; R[i] += cr[i] * g; }
+    const cl = t.ch[0], cr = t.ch[1] || t.ch[0], off = Math.round(t.start * SR);
+    for (let i = 0; i < cl.length; i++) { L[off + i] += cl[i] * g; R[off + i] += cr[i] * g; }
   });
   limit(L); limit(R);
   return [L, R];
@@ -571,7 +547,7 @@ function ask(title, fields, okLabel = 'Aplicar', message = '') {
 }
 function showAbout() {
   showModal(`<div class="about"><img src="logo.png" alt="SGNAudio 7"><h2>SGNAudio 7</h2>
-    <p>Editor y grabador de audio multipista.<br>Versión 7.1.0 (mano para mover pistas + limitador)</p>
+    <p>Editor y grabador de audio multipista.<br>Versión 7.3.0 (cada pista con su propia selección y posición, como Audacity)</p>
     <p><b>Desarrollado por Salvador G. Núñez</b></p>
     <div class="actions" style="justify-content:center"><button id="mOk" class="primary">Cerrar</button></div></div>`);
   $('#mOk').onclick = closeModal;
@@ -598,16 +574,16 @@ function drawWave(t, canvas) {
   const w = canvas.width, h = canvas.height, g = canvas.getContext('2d');
   const TITLE = 22;
   g.clearRect(0, 0, w, h);
-  const len = t.ch[0].length, clipW = Math.min(w, Math.ceil((len / SR) * pps));
+  const len = t.ch[0].length, x0 = Math.round(t.start * pps), clipW = Math.min(w - x0, Math.ceil((len / SR) * pps));
   // Clip estilo Audacity 4: banda de título + fondo durazno + onda oscura
-  g.fillStyle = '#ffd2a3'; g.fillRect(0, 0, clipW, h);
-  g.fillStyle = '#fde0b8'; g.fillRect(0, 0, clipW, TITLE);
+  g.fillStyle = '#ffd2a3'; g.fillRect(x0, 0, clipW, h);
+  g.fillStyle = '#fde0b8'; g.fillRect(x0, 0, clipW, TITLE);
   g.fillStyle = '#3a2412'; g.font = '600 12px -apple-system, Segoe UI, sans-serif';
-  g.save(); g.beginPath(); g.rect(0, 0, clipW, TITLE); g.clip(); g.fillText(t.name, 6, 15); g.restore();
+  g.save(); g.beginPath(); g.rect(x0, 0, clipW, TITLE); g.clip(); g.fillText('✋ ' + t.name, x0 + 6, 15); g.restore();
   const chs = t.ch.length, area = h - TITLE, lh = area / chs, spp = SR / pps;
   for (let c = 0; c < chs; c++) {
     const d = t.ch[c], mid = TITLE + lh * c + lh / 2, amp = lh / 2 * 0.94;
-    g.fillStyle = 'rgba(58,36,18,.25)'; g.fillRect(0, mid, clipW, 1);
+    g.fillStyle = 'rgba(58,36,18,.25)'; g.fillRect(x0, mid, clipW, 1);
     for (let x = 0; x < clipW; x++) {
       const s0 = Math.floor(x * spp); if (s0 >= d.length) break;
       const s1 = Math.min(d.length, Math.max(s0 + 1, Math.floor((x + 1) * spp)));
@@ -617,9 +593,9 @@ function drawWave(t, canvas) {
       const rms = Math.sqrt(sum / n);
       const clip = Math.max(mx, -mn) >= 0.99;
       g.fillStyle = clip ? '#c0392b' : '#4a2c17';
-      g.fillRect(x, mid - mx * amp, 1, Math.max(1, (mx - mn) * amp));
+      g.fillRect(x0 + x, mid - mx * amp, 1, Math.max(1, (mx - mn) * amp));
       g.fillStyle = '#2a170a';
-      g.fillRect(x, mid - rms * amp, 1, Math.max(1, rms * 2 * amp));
+      g.fillRect(x0 + x, mid - rms * amp, 1, Math.max(1, rms * 2 * amp));
     }
   }
 }
@@ -660,7 +636,18 @@ function buildTracks() {
     row.querySelector('.vol').oninput = (e) => { t.gain = parseFloat(e.target.value); livePlayGains(); };
     row.querySelector('.head').addEventListener('mousedown', () => setActive(t.id));
     const wrap = row.querySelector('.wavewrap');
-    wrap.addEventListener('mousedown', (ev) => (moveMode ? startMove(ev, t.id, wrap, canvas) : startSelect(ev, t.id, wrap)));
+    const onHeader = (ev) => {
+      const r = wrap.getBoundingClientRect(), x = ev.clientX - r.left, y = ev.clientY - r.top;
+      const c0 = t.start * pps, c1 = c0 + (t.ch[0].length / SR) * pps;
+      return y < 22 && x >= c0 && x <= c1;
+    };
+    wrap.addEventListener('mousemove', (ev) => { if (!moveMode) wrap.style.cursor = onHeader(ev) ? 'grab' : ''; });
+    wrap.addEventListener('mousedown', (ev) => (moveMode || onHeader(ev) ? startMove(ev, t.id, wrap, canvas) : startSelect(ev, t.id, wrap)));
+    wrap.addEventListener('dblclick', (ev) => {
+      if (moveMode || onHeader(ev)) return;
+      sel = { a: t.start, b: t.start + t.ch[0].length / SR, id: t.id }; updateOverlays();
+      setStatus('Seleccionada toda la pista «' + t.name + '».');
+    });
     box.appendChild(row);
     drawWave(t, canvas);
   });
@@ -671,9 +658,10 @@ function buildTracks() {
   });
 }
 function setActive(id) {
+  if (sel && sel.id !== id) sel = null;     // la selección pertenece a una sola pista
   activeId = id;
   document.querySelectorAll('.track').forEach((r) => r.classList.toggle('active', Number(r.dataset.id) === id));
-  updateInfo();
+  updateOverlays();
 }
 function fmtLong(sec) {
   sec = Math.max(0, sec);
@@ -682,7 +670,8 @@ function fmtLong(sec) {
 }
 function updateOverlays() {
   document.querySelectorAll('.selbox').forEach((b) => {
-    if (sel && sel.b > sel.a) { b.style.display = 'block'; b.style.left = sel.a * pps + 'px'; b.style.width = (sel.b - sel.a) * pps + 'px'; }
+    const mine = sel && Number(b.closest('.track').dataset.id) === sel.id;
+    if (mine && sel.b > sel.a) { b.style.display = 'block'; b.style.left = sel.a * pps + 'px'; b.style.width = (sel.b - sel.a) * pps + 'px'; }
     else b.style.display = 'none';
   });
   const cl = $('#cursorLine');
@@ -696,7 +685,7 @@ function updateOverlays() {
 }
 function updateInfo() {
   const t = activeTrack();
-  document.title = t ? 'SGNAudio 7 — ' + t.name : 'SGNAudio 7';
+  document.title = t ? 'SGNAudio 7 v7.3 — ' + t.name : 'SGNAudio 7 v7.3';
 }
 function renderAll() {
   $('#empty').classList.toggle('hidden', tracks.length > 0);
@@ -716,7 +705,7 @@ function startSelect(ev, id, wrap) {
     if (!moved && Math.abs(e.clientX - x0) < 3) return;
     moved = true;
     const t1 = toTime(e);
-    sel = { a: Math.min(t0, t1), b: Math.max(t0, t1) };
+    sel = { a: Math.min(t0, t1), b: Math.max(t0, t1), id };
     updateOverlays();
   };
   const up = () => {
@@ -734,7 +723,7 @@ function startMove(ev, id, wrap, canvas) {
   setActive(id);
   const t = tracks.find((x) => x.id === id); if (!t) return;
   const x0 = ev.clientX;
-  const minDelta = -leadingSilenceSamples(t) / SR;   // hasta dónde se puede adelantar (s)
+  const minDelta = -t.start;                         // no se puede pasar del inicio del proyecto
   let delta = 0, moved = false;
   wrap.classList.add('grabbing');
   const move = (e) => {
@@ -746,10 +735,12 @@ function startMove(ev, id, wrap, canvas) {
   const up = () => {
     window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up);
     wrap.classList.remove('grabbing'); canvas.style.transform = '';
-    if (!moved) return;
-    const n = Math.round(delta * SR);
-    if (n === 0) setStatus('Esta pista ya está al inicio: no se puede adelantar más.');
-    else shiftTrack(t, n);
+    if (!moved || Math.abs(delta) < 1 / SR) return;
+    stopPlay(); snapshot();
+    t.start = Math.max(0, t.start + delta);
+    if (sel && sel.id === t.id) sel = { a: sel.a + delta, b: sel.b + delta, id: t.id };
+    renderAll();
+    setStatus('Pista «' + t.name + '» ahora empieza en ' + t.start.toFixed(2) + ' s. Su duración no cambia. Deshacer con ↶.');
   };
   window.addEventListener('mousemove', move); window.addEventListener('mouseup', up);
 }
@@ -783,7 +774,7 @@ function tick() {
     const pl = $('#playLine');
     if (pl) { pl.style.display = 'block'; pl.style.left = HEAD_W + pos * pps + 'px'; }
     $('#clock').textContent = fmtLong(pos);
-    if (!loop && pos >= playTo - 0.005) { stopPlay(); cursor = sel ? sel.a : cursor; updateOverlays(); }
+    if (pos >= playTo - 0.005) { if (loop && sel) play(); else { stopPlay(); cursor = sel ? sel.a : cursor; updateOverlays(); } }
     const ws = $('#workspace');
     const x = HEAD_W + pos * pps;
     if (x > ws.scrollLeft + ws.clientWidth - 40) ws.scrollLeft = x - HEAD_W - 40;
