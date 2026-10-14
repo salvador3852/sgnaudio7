@@ -76,11 +76,13 @@ function buildMenu() {
         fx('Cambiar velocidad…', 'speed'),
         fx('Graves (Bass Boost)', 'bass'),
         fx('Compresor suave', 'compress'),
+        fx('Limitador…', 'limiter'),
       ],
     },
     {
       label: 'Pista',
       submenu: [
+        item('Herramienta Mover pista (mano) — tecla H', 'move-tool'),
         item('Nueva pista vacía', 'new-track'),
         item('Duplicar pista', 'dup-track'),
         item('Eliminar pista', 'del-track'),

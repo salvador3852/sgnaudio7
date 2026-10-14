@@ -17,6 +17,7 @@ let sel = null;             // {a,b} en segundos
 let cursor = 0;             // segundos
 let clipboard = null;       // [Float32Array]
 let loop = false;
+let moveMode = false;       // herramienta Mover (mano)
 let undoStack = [];
 let redoStack = [];
 let playing = false;
@@ -133,6 +134,34 @@ function splitTrack() {
   tracks.splice(tracks.indexOf(t) + 1, 0, r);
   renderAll();
 }
+// Muestras de silencio exacto al inicio de la pista (límite para mover hacia la izquierda)
+function leadingSilenceSamples(t) {
+  const n = t.ch[0].length;
+  let i = 0;
+  for (; i < n; i++) {
+    let nz = false;
+    for (const c of t.ch) if (c[i] !== 0) { nz = true; break; }
+    if (nz) break;
+  }
+  return Math.min(i, Math.max(0, n - 1));
+}
+// Mueve una pista en el tiempo: n > 0 la retrasa (agrega silencio), n < 0 la adelanta (quita silencio inicial)
+function shiftTrack(t, n) {
+  if (!n) return;
+  stopPlay(); snapshot();
+  if (n > 0) t.ch = t.ch.map((c) => { const o = new Float32Array(c.length + n); o.set(c, n); return o; });
+  else t.ch = t.ch.map((c) => c.slice(-n));
+  renderAll();
+  setStatus('Pista «' + t.name + '» movida ' + (n > 0 ? 'a la derecha ' : 'a la izquierda ') + (Math.abs(n) / SR).toFixed(2) + ' s. Deshacer con ↶.');
+}
+function toggleMove(force) {
+  moveMode = typeof force === 'boolean' ? force : !moveMode;
+  $('#btnMove').classList.toggle('on', moveMode);
+  document.body.classList.toggle('movemode', moveMode);
+  setStatus(moveMode
+    ? 'Herramienta Mover ✋ activada: arrastra una pista a la izquierda o a la derecha. Pulsa ✋ otra vez para volver a seleccionar.'
+    : 'Herramienta de selección activada.');
+}
 function newProject() {
   ask('Nuevo proyecto', [], 'Descartar y empezar', 'Se cerrarán todas las pistas del proyecto actual. ¿Continuar?').then((ok) => {
     if (!ok) return;
@@ -220,8 +249,41 @@ function selectAll() {
 const FX_LABEL = {
   'fade-in': 'Fundido de entrada', 'fade-out': 'Fundido de salida', amplify: 'Amplificar', normalize: 'Normalizar',
   reverse: 'Al revés', silence: 'Silencio', invert: 'Invertir fase', 'noise-gate': 'Reducción de ruido',
-  echo: 'Eco', speed: 'Velocidad', bass: 'Graves', compress: 'Compresor',
+  echo: 'Eco', speed: 'Velocidad', bass: 'Graves', compress: 'Compresor', limiter: 'Limitador',
 };
+
+// Limitador con anticipación (5 ms): la ganancia nunca deja pasar picos por encima del techo.
+// Ganancia común a todos los canales para conservar la imagen estéreo.
+function limiterGain(chs, a, b, ceil) {
+  const n = b - a;
+  const N = Math.max(1, Math.round(0.005 * SR));
+  const req = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    let m = 0;
+    for (const c of chs) { const v = Math.abs(c[a + i]); if (v > m) m = v; }
+    req[i] = m > ceil ? ceil / m : 1;
+  }
+  const mn = new Float32Array(n);             // mínimo móvil (ventana 2N+1)
+  const dq = new Int32Array(n);
+  let h = 0, tl = 0, added = 0;
+  for (let i = 0; i < n; i++) {
+    const hi = Math.min(n - 1, i + N);
+    while (added <= hi) {
+      while (tl > h && req[dq[tl - 1]] >= req[added]) tl--;
+      dq[tl++] = added; added++;
+    }
+    while (dq[h] < i - N) h++;
+    mn[i] = req[dq[h]];
+  }
+  const pre = new Float64Array(n + 1);        // media móvil (ventana 2N+1) para suavizar sin chasquidos
+  for (let i = 0; i < n; i++) pre[i + 1] = pre[i] + mn[i];
+  const out = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const lo = Math.max(0, i - N), hi = Math.min(n - 1, i + N);
+    out[i] = (pre[hi + 1] - pre[lo]) / (hi - lo + 1);
+  }
+  return out;
+}
 
 function eachChannelRange(t, a, b, fn) {
   t.ch = t.ch.map((c, i) => {
@@ -243,6 +305,7 @@ async function applyFx(name) {
   if (name === 'amplify') { p = await ask('Amplificar', [{ id: 'db', label: 'Ganancia (dB)', value: 6, step: 0.5 }]); if (!p) return; }
   if (name === 'noise-gate') { p = await ask('Reducción de ruido (puerta)', [{ id: 'thr', label: 'Umbral (dB)', value: -45, step: 1 }]); if (!p) return; }
   if (name === 'echo') { p = await ask('Eco', [{ id: 'ms', label: 'Retardo (ms)', value: 300, step: 10 }, { id: 'decay', label: 'Intensidad (0–0.9)', value: 0.4, step: 0.05 }]); if (!p) return; }
+  if (name === 'limiter') { p = await ask('Limitador', [{ id: 'db', label: 'Techo máximo (dB, entre -20 y 0)', value: -1, step: 0.5 }]); if (!p) return; }
   if (name === 'speed') { p = await ask('Cambiar velocidad', [{ id: 'f', label: 'Factor (0.5 = lento, 2 = rápido)', value: 1.25, step: 0.05 }]); if (!p) return; }
   stopPlay(); snapshot();
   const len = b - a;
@@ -304,6 +367,16 @@ async function applyFx(name) {
       });
       break;
     }
+    case 'limiter': {
+      const ceil = Math.pow(10, clamp(p.db, -20, 0) / 20);
+      const g = limiterGain(t.ch, a, b, ceil);
+      t.ch = t.ch.map((c) => {
+        const o = c.slice();
+        for (let i = 0; i < len; i++) o[a + i] = clamp(o[a + i] * g[i], -ceil, ceil);
+        return o;
+      });
+      break;
+    }
     case 'speed': {
       const f = clamp(p.f, 0.25, 4);
       const nl = Math.max(1, Math.round(len / f));
@@ -324,7 +397,7 @@ async function applyFx(name) {
     default: undoStack.pop(); return;
   }
   renderAll();
-  setStatus('Efecto aplicado: ' + (FX_LABEL[name] || name) + '.');
+  setStatus('Efecto aplicado a «' + t.name + '» (' + (sel ? 'zona seleccionada' : 'pista completa') + '): ' + (FX_LABEL[name] || name) + '.');
 }
 
 // ---------- Reproducción ----------
@@ -498,7 +571,7 @@ function ask(title, fields, okLabel = 'Aplicar', message = '') {
 }
 function showAbout() {
   showModal(`<div class="about"><img src="logo.png" alt="SGNAudio 7"><h2>SGNAudio 7</h2>
-    <p>Editor y grabador de audio multipista.<br>Versión 7.0.0</p>
+    <p>Editor y grabador de audio multipista.<br>Versión 7.1.0 (mano para mover pistas + limitador)</p>
     <p><b>Desarrollado por Salvador G. Núñez</b></p>
     <div class="actions" style="justify-content:center"><button id="mOk" class="primary">Cerrar</button></div></div>`);
   $('#mOk').onclick = closeModal;
@@ -511,7 +584,7 @@ function showEffectsMenu() {
   $('#mOk').onclick = closeModal;
 }
 function showShortcuts() {
-  const rows = [['Espacio', 'Reproducir / Pausa'], ['R', 'Grabar / Terminar'], ['S', 'Detener'], ['L', 'Repetir selección'], ['Inicio', 'Ir al inicio'],
+  const rows = [['Espacio', 'Reproducir / Pausa'], ['R', 'Grabar / Terminar'], ['S', 'Detener'], ['L', 'Repetir selección'], ['H', 'Mover pista (mano ✋)'], ['Inicio', 'Ir al inicio'],
     ['Ctrl/Cmd + Z / Shift+Z', 'Deshacer / Rehacer'], ['Ctrl/Cmd + X / C / V', 'Cortar / Copiar / Pegar'], ['Supr', 'Eliminar selección'],
     ['Ctrl/Cmd + T', 'Recortar al área'], ['Ctrl/Cmd + A', 'Seleccionar todo'], ['Ctrl/Cmd + + / −', 'Zoom'], ['Ctrl/Cmd + O', 'Abrir audio']];
   showModal(`<h2>Atajos de teclado</h2><table>${rows.map((r) => `<tr><td><kbd>${r[0]}</kbd></td><td>${r[1]}</td></tr>`).join('')}</table>
@@ -587,7 +660,7 @@ function buildTracks() {
     row.querySelector('.vol').oninput = (e) => { t.gain = parseFloat(e.target.value); livePlayGains(); };
     row.querySelector('.head').addEventListener('mousedown', () => setActive(t.id));
     const wrap = row.querySelector('.wavewrap');
-    wrap.addEventListener('mousedown', (ev) => startSelect(ev, t.id, wrap));
+    wrap.addEventListener('mousedown', (ev) => (moveMode ? startMove(ev, t.id, wrap, canvas) : startSelect(ev, t.id, wrap)));
     box.appendChild(row);
     drawWave(t, canvas);
   });
@@ -655,6 +728,32 @@ function startSelect(ev, id, wrap) {
   window.addEventListener('mousemove', move); window.addEventListener('mouseup', up);
 }
 
+// ---------- Interfaz: mover pista (mano) ----------
+function startMove(ev, id, wrap, canvas) {
+  if (ev.button !== 0) return;
+  setActive(id);
+  const t = tracks.find((x) => x.id === id); if (!t) return;
+  const x0 = ev.clientX;
+  const minDelta = -leadingSilenceSamples(t) / SR;   // hasta dónde se puede adelantar (s)
+  let delta = 0, moved = false;
+  wrap.classList.add('grabbing');
+  const move = (e) => {
+    if (!moved && Math.abs(e.clientX - x0) < 3) return;
+    moved = true;
+    delta = clamp((e.clientX - x0) / pps, minDelta, 3600);
+    canvas.style.transform = 'translateX(' + delta * pps + 'px)';
+  };
+  const up = () => {
+    window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up);
+    wrap.classList.remove('grabbing'); canvas.style.transform = '';
+    if (!moved) return;
+    const n = Math.round(delta * SR);
+    if (n === 0) setStatus('Esta pista ya está al inicio: no se puede adelantar más.');
+    else shiftTrack(t, n);
+  };
+  window.addEventListener('mousemove', move); window.addEventListener('mouseup', up);
+}
+
 // ---------- Zoom ----------
 function maxPps() { return Math.min(4000, 30000 / Math.max(dur(), 1)); }
 function setZoom(v) { pps = clamp(v, 2, maxPps()); renderAll(); }
@@ -700,7 +799,7 @@ const commands = {
   undo, redo, cut: doCut, copy: doCopy, paste: doPaste, delete: doDelete, trim: doTrim,
   'select-all': selectAll, split: splitTrack, 'new-track': newEmptyTrack, 'dup-track': dupTrack, 'del-track': delTrack,
   'zoom-in': () => setZoom(pps * 1.5), 'zoom-out': () => setZoom(pps / 1.5), 'zoom-fit': zoomFit,
-  about: showAbout, shortcuts: showShortcuts,
+  about: showAbout, shortcuts: showShortcuts, 'move-tool': () => toggleMove(),
 };
 window.sgn.onMenu((cmd, arg) => {
   if (cmd === 'fx') applyFx(arg);
@@ -711,6 +810,7 @@ $('#btnPlay').onclick = togglePlay;
 $('#btnStop').onclick = () => { stopPlay(); };
 $('#btnRec').onclick = toggleRec;
 $('#btnLoop').onclick = () => { loop = !loop; $('#btnLoop').classList.toggle('on', loop); if (playing) play(); };
+$('#btnMove').onclick = () => toggleMove();
 $('#btnEnd').onclick = () => { stopPlay(); cursor = dur(); sel = null; updateOverlays(); };
 $('#btnFx').onclick = showEffectsMenu;
 $('#btnStart').onclick = () => { stopPlay(); cursor = 0; sel = null; $('#workspace').scrollLeft = 0; updateOverlays(); };
@@ -741,6 +841,7 @@ window.addEventListener('keydown', (e) => {
   else if (k === 'r') toggleRec();
   else if (k === 's') stopPlay();
   else if (k === 'l') $('#btnLoop').click();
+  else if (k === 'h') toggleMove();
   else if (e.key === 'Home') $('#btnStart').click();
   else if (e.key === 'Backspace') doDelete();
 });
