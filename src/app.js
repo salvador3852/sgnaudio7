@@ -583,26 +583,44 @@ async function getLame() {
   if (!lameLib || !lameLib.Mp3Encoder) throw new Error('lamejs inválido');
   return lameLib;
 }
+let mp3Busy = false;
 async function exportMp3() {
   if (!tracks.length) return setStatus('No hay audio para exportar.');
-  let lame;
-  try { lame = await getLame(); } catch (e) { return setStatus('No se pudo cargar el codificador MP3.'); }
-  setStatus('Codificando MP3…');
-  const [L, R] = mixdown();
-  const toI16 = (f) => { const o = new Int16Array(f.length); for (let i = 0; i < f.length; i++) o[i] = Math.round(f[i] * 32767); return o; };
-  const l16 = toI16(L), r16 = toI16(R);
-  const enc = new lame.Mp3Encoder(2, SR, 192);
-  const parts = []; const block = 1152;
-  for (let i = 0, n = 0; i < l16.length; i += block, n++) {
-    const buf = enc.encodeBuffer(l16.subarray(i, i + block), r16.subarray(i, i + block));
-    if (buf.length) parts.push(new Uint8Array(buf));
-    if (n % 200 === 0) { setStatus('Codificando MP3… ' + Math.round((i / l16.length) * 100) + '%'); await sleep(0); }
+  if (mp3Busy) return setStatus('Ya se está creando el MP3. Espera un momento…');
+  mp3Busy = true;
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(10,12,24,.78);z-index:9999;display:flex;align-items:center;justify-content:center;font-family:inherit';
+  overlay.innerHTML = '<div style="background:#fff;color:#14172b;border-radius:16px;padding:28px 34px;max-width:440px;text-align:center;box-shadow:0 10px 40px rgba(0,0,0,.4)"><div style="font-size:22px;font-weight:800;margin-bottom:8px">Creando tu MP3…</div><div style="font-size:15px;margin-bottom:16px">Esto puede tardar un poco. No cierres la aplicación.</div><div style="height:14px;background:#e3e6f2;border-radius:8px;overflow:hidden"><div id="mp3Bar" style="height:100%;width:0%;background:#2f6bff;transition:width .2s"></div></div><div id="mp3Pct" style="margin-top:10px;font-size:18px;font-weight:700">0%</div></div>';
+  document.body.appendChild(overlay);
+  const upd = (p) => { const bar = overlay.querySelector('#mp3Bar'), pc = overlay.querySelector('#mp3Pct'); if (bar) bar.style.width = p + '%'; if (pc) pc.textContent = p + '%'; setStatus('Creando MP3… ' + p + '%'); };
+  try {
+    const lame = await getLame();
+    await sleep(30);
+    const [L, R] = mixdown();
+    let same = true;
+    for (let i = 0; i < L.length; i++) { if (L[i] !== R[i]) { same = false; break; } }
+    const toI16 = (f) => { const o = new Int16Array(f.length); for (let i = 0; i < f.length; i++) { let v = f[i]; if (!(v === v)) v = 0; v = v > 1 ? 1 : v < -1 ? -1 : v; o[i] = Math.round(v * 32767); } return o; };
+    const l16 = toI16(L), r16 = same ? null : toI16(R);
+    const enc = new lame.Mp3Encoder(same ? 1 : 2, SR, same ? 128 : 192);
+    const parts = []; const block = 1152;
+    for (let i = 0, n = 0; i < l16.length; i += block, n++) {
+      const buf = same ? enc.encodeBuffer(l16.subarray(i, i + block)) : enc.encodeBuffer(l16.subarray(i, i + block), r16.subarray(i, i + block));
+      if (buf.length) parts.push(new Uint8Array(buf));
+      if (n % 60 === 0) { upd(Math.min(99, Math.round((i / l16.length) * 100))); await sleep(0); }
+    }
+    const end = enc.flush(); if (end.length) parts.push(new Uint8Array(end));
+    const total = parts.reduce((s, p) => s + p.length, 0);
+    const out = new Uint8Array(total); let o = 0; parts.forEach((p) => { out.set(p, o); o += p.length; });
+    upd(100);
+    overlay.remove();
+    const path = await window.sgn.saveDialog({ defaultName: 'SGNAudio7-mezcla.mp3', ext: 'mp3', data: out.buffer });
+    setStatus(path ? 'MP3 guardado: ' + path : 'Exportación cancelada.');
+  } catch (e) {
+    setStatus('No se pudo crear el MP3: ' + (e && e.message ? e.message : e) + '. Prueba con Exportar WAV.');
+  } finally {
+    overlay.remove();
+    mp3Busy = false;
   }
-  const end = enc.flush(); if (end.length) parts.push(new Uint8Array(end));
-  const total = parts.reduce((s, p) => s + p.length, 0);
-  const out = new Uint8Array(total); let o = 0; parts.forEach((p) => { out.set(p, o); o += p.length; });
-  const path = await window.sgn.saveDialog({ defaultName: 'SGNAudio7-mezcla.mp3', ext: 'mp3', data: out.buffer });
-  setStatus(path ? 'MP3 guardado: ' + path : 'Exportación cancelada.');
 }
 
 // ---------- Interfaz: modales ----------
@@ -624,7 +642,7 @@ function ask(title, fields, okLabel = 'Aplicar', message = '') {
 }
 function showAbout() {
   showModal(`<div class="about"><img src="logo.png" alt="SGNAudio 7"><h2>SGNAudio 7</h2>
-    <p>Editor y grabador de audio multipista.<br>Versión 7.4.0 (guardar y abrir proyectos)</p>
+    <p>Editor y grabador de audio multipista.<br>Versión 7.5.0 (MP3 más fiable)</p>
     <p><b>Desarrollado por Salvador G. Núñez</b></p>
     <div class="actions" style="justify-content:center"><button id="mOk" class="primary">Cerrar</button></div></div>`);
   $('#mOk').onclick = closeModal;
@@ -762,7 +780,7 @@ function updateOverlays() {
 }
 function updateInfo() {
   const t = activeTrack();
-  document.title = t ? 'SGNAudio 7 v7.4 — ' + t.name : 'SGNAudio 7 v7.4';
+  document.title = t ? 'SGNAudio 7 v7.5 — ' + t.name : 'SGNAudio 7 v7.5';
 }
 function renderAll() {
   $('#empty').classList.toggle('hidden', tracks.length > 0);
